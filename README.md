@@ -1,4 +1,4 @@
-# Solana Memecoin Telegram Bot — v1.4 (ম্যানুয়াল / অটো মোড যোগ হয়েছে)
+# Solana Memecoin Telegram Bot — v1.7
 
 তোমার জন্য বানানো Smart Memecoin বট। Telegram থেকেই rug check, fast buy/sell, auto take-profit / stop-loss, PNL — আর এখন copy trade-ও দেখা যাবে।
 
@@ -6,7 +6,7 @@
 
 | ফিচার | কী করে |
 |---|---|
-| **Fast Buy/Sell** | Mint পেস্ট করলেই Buy 0.1 / 0.5 / 1 SOL বাটন। Sell 25% / 50% / 100%। Jupiter দিয়ে swap |
+| **Fast Buy/Sell** | Mint পেস্ট করলেই Buy 0.02 / 0.1 / 0.5 / 1 SOL বাটন। Sell 25% / 50% / 100%। Jupiter দিয়ে swap |
 | **Rug Check** | কেনার আগে RugCheck + DexScreener: mint/freeze authority, LP locked %, top-10 holder %, liquidity। DANGER হলে buy ব্লক |
 | **Auto TP/SL** | ডিফল্ট: 2x হলে 50% সেল, -30% হলে 100% সেল। `/set_tp`, `/set_sl` দিয়ে বদলানো যায়। প্রতি 20 সেকেন্ডে চেক করে |
 | **PNL Tracker** | `/positions` — খোলা ট্রেড + লাইভ %, `/pnl` — মোট লাভ-লস (SOL-এ), SQLite-এ সেভ থাকে |
@@ -148,6 +148,10 @@ Auto-launch-এর preset dev buy বদলাতে: `/launch_set 0.1` (সর�
 
 ⚠️ **সতর্কতা:** key দেওয়া মানে বট ওই wallet থেকে খরচ করতে পারবে। Main wallet connect করো না — Phantom-এই নতুন wallet বানিয়ে (Manage Accounts → Add Wallet) অল্প SOL রেখে সেটা connect করো, সেটাই সবচেয়ে নিরাপদ।
 
+## সুন্দর /start + বাটন (v1.7) ✨
+
+`/start` এখন ছোট আর পরিষ্কার — শুধু welcome, DRY-RUN/TP/SL স্ট্যাটাস আর কী কী করে সেটা। নিচে ৫টা বাটন: 🔍 Check a token, 👛 My wallet, ⚙️ Modes, 🚀 Launch token, 📖 All commands — ট্যাপ করলেই সেই কাজটা খুলবে। পুরো কমান্ডের লিস্ট এখন শুধু `/help`-এ।
+
 ## Tweet থেকে টোকেন লঞ্চ (v1.3) 🚀
 
 কোনো জনপ্রিয় X/Twitter পোস্ট ভাইরাল হলে, সেই পোস্টের লিংক দিলেই বট Pump.fun-এ টোকেন লঞ্চ করে দেবে:
@@ -200,3 +204,6 @@ Auto-launch-এর preset dev buy বদলাতে: `/launch_set 0.1` (সর�
 - `test_modes.py` — মোড টেস্ট (defaults, set/get, ভুল ইনপুট বাতিল, callback সাইজ)
 - `watch.py` — dip watchlist (SQLite-তে সেভ থাকে, সর্বোচ্চ ৫টা)
 - `test_advanced.py` — v1.5 টেস্ট (0.02 floor, trailing SL, dip watch, strict rug, priority fee)
+- `wallets.py` — multi-wallet registry (সর্বোচ্চ ৩টা wallet, active wallet DB-তে সেভ থাকে)
+- `test_wallets.py` — v1.6 টেস্ট (registry, switch, ভুল key বাতিল)
+- `test_ui.py` — v1.7 টেস্ট (welcome টেক্সট, বাটন, /help লিস্ট)

@@ -170,36 +170,100 @@ async def sol_balance(pubkey: Pubkey) -> float:
 
 # ---------- commands ----------
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update):
-        return
-    dry = "🧪 DRY-RUN ON — no real trades yet" if config.DRY_RUN else "🔴 LIVE TRADING ON"
-    await update.message.reply_text(
-        "👋 Solana Memecoin Bot v1.6\n\n"
+def _welcome_text() -> str:
+    """Short, clean /start message (v1.7). Full list lives in /help."""
+    dry = ("🧪 <b>DRY-RUN ON</b> — no real trades yet"
+           if config.DRY_RUN else "🔴 <b>LIVE TRADING ON</b>")
+    return (
+        "👋 <b>Solana Memecoin Bot v1.7</b>\n\n"
         f"{dry}\n"
-        "TP: "
-        f"{_settings['tp_mult']}x → sell {_settings['tp_sell_pct']}%\n"
-        f"SL: {_settings['sl_pct']}%\n\n"
-        "Paste a token mint address to check it.\n"
-        "/check <mint> — rug check\n"
-        "/buy <mint> <sol> — e.g. /buy <mint> 0.5\n"
-        "/sell <mint> <pct> — e.g. /sell <mint> 50\n"
-        "/positions — open trades\n"
-        "/pnl — total PNL\n"
-        "/wallet — balance\n"
-        "Copy trade: /copy_add <wallet> [sol] — follow a trader's wallet\n"
-        "/copy_list — followed wallets\n"
-        "Launch a token: /launch <tweet link> — tweet → Pump.fun token\n"
-        "/mode — manual / auto for TP/SL, copy trade, launch\n"
-        "Connect wallet: /connect — Phantom / Jupiter / Solflare\n"
-        "Advanced: /dip_add (buy the dip)  /trail  /rug  /set_priority\n"
-        "/help — all commands\n\n"
+        f"🎯 TP {_settings['tp_mult']}x → sell {_settings['tp_sell_pct']}%"
+        f"   •   🛑 SL {_settings['sl_pct']}%\n\n"
+        "<b>What I do</b>\n"
+        "🔍 Rug check + fast buy / sell\n"
+        "📋 Copy trade — follow a trader's wallet\n"
+        "🚀 Tweet → Pump.fun token launch\n"
+        "📉 Buy the dip   •   ⚙️ Manual / Auto modes\n\n"
+        "Paste a mint address to check it, or tap below 👇\n\n"
         "⚠️ Memecoins can go to zero. Only trade what you can afford to lose."
     )
 
 
+def _start_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔍 Check a token", callback_data="menu:check"),
+         InlineKeyboardButton("👛 My wallet", callback_data="menu:wallet")],
+        [InlineKeyboardButton("⚙️ Modes", callback_data="menu:mode"),
+         InlineKeyboardButton("🚀 Launch token", callback_data="menu:launch")],
+        [InlineKeyboardButton("📖 All commands", callback_data="menu:help")],
+    ])
+
+
+def _help_text() -> str:
+    return (
+        "📖 <b>All commands</b>\n\n"
+        "<b>Trade</b>\n"
+        "/check &lt;mint&gt; — rug check\n"
+        "/buy &lt;mint&gt; &lt;sol&gt; — e.g. /buy &lt;mint&gt; 0.5 (min 0.02)\n"
+        "/sell &lt;mint&gt; &lt;pct&gt; — e.g. /sell &lt;mint&gt; 50\n"
+        "/positions — open trades\n"
+        "/pnl — total PNL\n\n"
+        "<b>Wallet</b>\n"
+        "/wallet — balances\n"
+        "/wallet_use &lt;name&gt; — switch active wallet\n"
+        "/connect — connect Phantom / Jupiter / Solflare\n\n"
+        "<b>Copy trade</b>\n"
+        "/copy_add &lt;wallet&gt; [sol] — follow a trader\n"
+        "/copy_list — followed wallets\n"
+        "/copy_remove /copy_on /copy_off /copy_sl /copy_set\n\n"
+        "<b>Launch</b>\n"
+        "/launch &lt;tweet link&gt; — tweet → Pump.fun token\n"
+        "/launch_name /launch_symbol /launch_set\n\n"
+        "<b>Modes &amp; advanced</b>\n"
+        "/mode — manual / auto for TP/SL, copy, launch\n"
+        "/settings — TP/SL/slippage/priority\n"
+        "/dip_add &lt;mint&gt; &lt;price&gt; &lt;sol&gt; — buy the dip\n"
+        "/trail on|off — trailing breakeven SL\n"
+        "/rug strict|normal — strict rug check\n"
+        "/set_priority &lt;lamports&gt; — faster swaps"
+    )
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard(update):
+        return
+    await update.effective_message.reply_text(
+        _welcome_text(), parse_mode="HTML", reply_markup=_start_keyboard())
+
+
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await start(update, context)
+    if not await guard(update):
+        return
+    await update.effective_message.reply_text(_help_text(), parse_mode="HTML")
+
+
+_MENU_TARGETS = {
+    "check": "check_cmd",
+    "wallet": "wallet_cmd",
+    "mode": "mode_cmd",
+    "launch": "launch_cmd",
+    "help": "help_cmd",
+}
+
+
+async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Quick-action buttons under /start. Runs the matching command —
+    with no args each one shows its info/usage, exactly like typing it."""
+    query = update.callback_query
+    await query.answer()
+    if not is_owner(update):
+        await query.edit_message_text("⛔ This bot is private.")
+        return
+    target = (query.data or "").split(":")[1] if ":" in (query.data or "") else ""
+    fn_name = _MENU_TARGETS.get(target)
+    if not fn_name:
+        return
+    await globals()[fn_name](update, context)
 
 
 async def wallet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -208,7 +272,7 @@ async def wallet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_w = wallets.list_wallets()
     valid = [w for w in all_w if w["valid"]]
     if not valid:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "No wallet connected yet.\n"
             "Phantom, Jupiter, Solflare — যেকোনো wallet connect করা যায়, দেখো: /connect\n"
             "Or make a fresh one: python3 generate_wallet.py"
@@ -231,7 +295,7 @@ async def wallet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"\n<b>{w['name']}</b>{mark}\n<code>{w['pubkey']}</code>\nBalance: <b>{bal_txt}</b>")
     lines.append(f"\nMode: {'DRY-RUN 🧪' if config.DRY_RUN else 'LIVE 🔴'}")
     lines.append("Switch wallet: /wallet_use <name>")
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    await update.effective_message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
 async def wallet_use_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -239,7 +303,7 @@ async def wallet_use_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not context.args:
         names = [w["name"] for w in wallets.valid_wallets()]
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "Usage: /wallet_use <name>\nConnected: "
             + (", ".join(names) if names else "none — see /connect"))
         return
@@ -247,10 +311,10 @@ async def wallet_use_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         wallets.set_active_name(name)
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
         return
     kp = get_keypair()
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         f"✅ Active wallet: <b>{name}</b>\n<code>{kp.pubkey() if kp else '?'}</code>\n"
         f"All buys/sells/launches will now use this wallet.",
         parse_mode="HTML")
@@ -259,7 +323,7 @@ async def wallet_use_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def connect_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         "👛 <b>Connect any wallet — Phantom / Jupiter / Solflare</b>\n\n"
         "Telegram bot-এ ওয়েবসাইটের মতো 'Connect' বোতাম হয় না — auto TP/SL, copy trade, "
         "dip buy-এর জন্য বটকে নিজে sign করতে হয়, তাই key বটের কাছেই থাকতে হয়।\n"
@@ -287,14 +351,14 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if not context.args:
-        await update.message.reply_text("Usage: /check <mint address>")
+        await update.effective_message.reply_text("Usage: /check <mint address>")
         return
     mint = context.args[0].strip()
-    await update.message.reply_text("🔍 Checking… (RugCheck + DexScreener)")
+    await update.effective_message.reply_text("🔍 Checking… (RugCheck + DexScreener)")
     result = await check_token(mint)
     text = format_report(mint, result)
     keyboard = [[b for b in _buy_keyboard(mint).inline_keyboard[0]]] if result.get("safe_to_buy") else []
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         text, parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
     )
@@ -389,16 +453,16 @@ async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /buy <mint> <sol> — e.g. /buy <mint> 0.5")
+        await update.effective_message.reply_text("Usage: /buy <mint> <sol> — e.g. /buy <mint> 0.5")
         return
     try:
         amount = float(context.args[1])
     except ValueError:
-        await update.message.reply_text("SOL amount must be a number, e.g. 0.5")
+        await update.effective_message.reply_text("SOL amount must be a number, e.g. 0.5")
         return
-    await update.message.reply_text("🔍 Rug-checking, then quoting…")
+    await update.effective_message.reply_text("🔍 Rug-checking, then quoting…")
     text = await do_buy(update, context.args[0].strip(), amount, context)
-    await update.message.reply_text(text)
+    await update.effective_message.reply_text(text)
 
 
 async def do_sell(mint: str, pct: float) -> str:
@@ -442,15 +506,15 @@ async def sell_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /sell <mint> <pct> — e.g. /sell <mint> 50")
+        await update.effective_message.reply_text("Usage: /sell <mint> <pct> — e.g. /sell <mint> 50")
         return
     try:
         pct = float(context.args[1])
     except ValueError:
-        await update.message.reply_text("Percent must be a number, e.g. 50")
+        await update.effective_message.reply_text("Percent must be a number, e.g. 50")
         return
     text = await do_sell(context.args[0].strip(), pct)
-    await update.message.reply_text(text)
+    await update.effective_message.reply_text(text)
 
 
 async def positions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -458,7 +522,7 @@ async def positions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     items = pos.list_positions()
     if not items:
-        await update.message.reply_text("No open positions.")
+        await update.effective_message.reply_text("No open positions.")
         return
     lines = ["📊 Open positions:"]
     for p in items:
@@ -473,7 +537,7 @@ async def positions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         src = p.get("source") or "manual"
         lines.append(f"  TP {p['tp_mult']}x / SL {p['sl_pct']}%"
                      + (f" • 📋 copy {src[5:11]}…" if src.startswith("copy:") else ""))
-    await update.message.reply_text("\n".join(lines))
+    await update.effective_message.reply_text("\n".join(lines))
 
 
 async def pnl_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -484,13 +548,13 @@ async def pnl_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [f"💰 Total realised PNL: {total:+.4f} SOL"]
     for mint, sym, side, amt, sol_amt, pnl, _ts in trades:
         lines.append(f"{side} {sym} {sol_amt} SOL (pnl {pnl:+.4f})")
-    await update.message.reply_text("\n".join(lines))
+    await update.effective_message.reply_text("\n".join(lines))
 
 
 async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         f"⚙️ Settings\nTP: {_settings['tp_mult']}x → sell {_settings['tp_sell_pct']}%\n"
         f"SL: {_settings['sl_pct']}%\nSlippage: {_settings['slippage_bps']} bps\n"
         f"Min buy: {config.MIN_BUY_SOL} SOL • Max buy: {config.MAX_BUY_SOL} SOL\n"
@@ -508,9 +572,9 @@ async def set_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         _settings["tp_mult"] = float(context.args[0])
-        await update.message.reply_text(f"TP set to {_settings['tp_mult']}x")
+        await update.effective_message.reply_text(f"TP set to {_settings['tp_mult']}x")
     except (IndexError, ValueError):
-        await update.message.reply_text("Usage: /set_tp 2")
+        await update.effective_message.reply_text("Usage: /set_tp 2")
 
 
 async def set_sl(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -518,9 +582,9 @@ async def set_sl(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         _settings["sl_pct"] = float(context.args[0])
-        await update.message.reply_text(f"SL set to {_settings['sl_pct']}%")
+        await update.effective_message.reply_text(f"SL set to {_settings['sl_pct']}%")
     except (IndexError, ValueError):
-        await update.message.reply_text("Usage: /set_sl -30")
+        await update.effective_message.reply_text("Usage: /set_sl -30")
 
 
 async def set_slippage(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -528,9 +592,9 @@ async def set_slippage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         _settings["slippage_bps"] = int(context.args[0])
-        await update.message.reply_text(f"Slippage set to {_settings['slippage_bps']} bps")
+        await update.effective_message.reply_text(f"Slippage set to {_settings['slippage_bps']} bps")
     except (IndexError, ValueError):
-        await update.message.reply_text("Usage: /set_slippage 100")
+        await update.effective_message.reply_text("Usage: /set_slippage 100")
 
 
 async def on_mint_paste(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -539,11 +603,11 @@ async def on_mint_paste(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mint = update.message.text.strip()
     if not looks_like_mint(mint):
         return
-    await update.message.reply_text("🔍 Checking…")
+    await update.effective_message.reply_text("🔍 Checking…")
     result = await check_token(mint)
     text = format_report(mint, result)
     keyboard = [[b for b in _buy_keyboard(mint).inline_keyboard[0]]] if result.get("safe_to_buy") else []
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         text, parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
     )
@@ -609,7 +673,7 @@ async def _send_launch_preview(update, context, p: dict):
             photo=p["image"], caption=_launch_preview_text(p),
             parse_mode="HTML", reply_markup=kb)
     else:
-        await update.message.reply_text(_launch_preview_text(p),
+        await update.effective_message.reply_text(_launch_preview_text(p),
                                         parse_mode="HTML", reply_markup=kb)
 
 
@@ -617,7 +681,7 @@ async def launch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if not context.args:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "Usage: /launch <tweet link>\n"
             "Example: /launch https://x.com/someone/status/123...\n\n"
             "The bot reads the tweet, takes its image + a name from the text, "
@@ -626,11 +690,11 @@ async def launch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     url = context.args[0].strip()
-    await update.message.reply_text("🔍 Reading the tweet…")
+    await update.effective_message.reply_text("🔍 Reading the tweet…")
     try:
         tweet = await tw.fetch_tweet(url)
     except Exception as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
         return
     meta = tw.derive_token_meta(tweet["text"], tweet["handle"])
     image = None
@@ -638,7 +702,7 @@ async def launch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             image = await launcher.download_image(tweet["image_url"])
         except Exception as e:
-            await update.message.reply_text(f"⚠️ Could not download the tweet image ({e}) — send a photo yourself, or cancel.")
+            await update.effective_message.reply_text(f"⚠️ Could not download the tweet image ({e}) — send a photo yourself, or cancel.")
     pending = {
         "tweet_url": tweet["tweet_url"], "author": tweet["author"],
         "handle": tweet["handle"], "text": tweet["text"],
@@ -650,26 +714,26 @@ async def launch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _mode("launch") == "auto":
         if not image:
             context.user_data["pending_launch"] = pending
-            await update.message.reply_text(
+            await update.effective_message.reply_text(
                 "⚠️ Auto-launch is ON, but this tweet has no image — send a photo "
                 "and I will launch it at once. Or switch back: /mode launch manual")
             await _send_launch_preview(update, context, pending)
             return
         if not config.DRY_RUN and get_keypair() is None:
-            await update.message.reply_text(
+            await update.effective_message.reply_text(
                 "❌ No trading wallet connected. See /connect in Telegram, or run generate_wallet.py and set WALLET_PRIVATE_KEY in Railway Variables.")
             return
         dev_buy = md.get_launch_dev_buy(config.LAUNCH_DEFAULT_DEV_BUY)
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"🚀 Auto-launch ON — launching <b>{pending['name']}</b> "
             f"(${pending['symbol']}) with {dev_buy} SOL dev buy…",
             parse_mode="HTML")
         try:
             msg = await _do_launch(pending, dev_buy)
         except Exception as e:
-            await update.message.reply_text(f"❌ Launch failed: {e}\nNothing was launched (or check Solscan before retrying).")
+            await update.effective_message.reply_text(f"❌ Launch failed: {e}\nNothing was launched (or check Solscan before retrying).")
             return
-        await update.message.reply_text(msg, parse_mode="HTML")
+        await update.effective_message.reply_text(msg, parse_mode="HTML")
         return
     context.user_data["pending_launch"] = pending
     await _send_launch_preview(update, context, pending)
@@ -680,17 +744,17 @@ async def launch_name_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     p = context.user_data.get("pending_launch")
     if not p:
-        await update.message.reply_text("No launch pending. Start with /launch <tweet link> first.")
+        await update.effective_message.reply_text("No launch pending. Start with /launch <tweet link> first.")
         return
     if not context.args:
-        await update.message.reply_text("Usage: /launch_name <new token name>")
+        await update.effective_message.reply_text("Usage: /launch_name <new token name>")
         return
     try:
         p["name"] = tw.sanitize_name(" ".join(context.args))
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
         return
-    await update.message.reply_text(f"Name updated to: {p['name']}\nTap a Launch button on the preview to launch, or /launch again to refresh it.")
+    await update.effective_message.reply_text(f"Name updated to: {p['name']}\nTap a Launch button on the preview to launch, or /launch again to refresh it.")
 
 
 async def launch_symbol_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -698,17 +762,17 @@ async def launch_symbol_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     p = context.user_data.get("pending_launch")
     if not p:
-        await update.message.reply_text("No launch pending. Start with /launch <tweet link> first.")
+        await update.effective_message.reply_text("No launch pending. Start with /launch <tweet link> first.")
         return
     if not context.args:
-        await update.message.reply_text("Usage: /launch_symbol <NEW>")
+        await update.effective_message.reply_text("Usage: /launch_symbol <NEW>")
         return
     try:
         p["symbol"] = tw.sanitize_symbol(context.args[0])
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
         return
-    await update.message.reply_text(f"Symbol updated to: ${p['symbol']}\nTap a Launch button on the preview to launch, or /launch again to refresh it.")
+    await update.effective_message.reply_text(f"Symbol updated to: ${p['symbol']}\nTap a Launch button on the preview to launch, or /launch again to refresh it.")
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -723,29 +787,29 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f = await photo.get_file()
         data = bytes(await f.download_as_bytearray())
         if len(data) > launcher.MAX_IMAGE_BYTES:
-            await update.message.reply_text("❌ That image is too big (max 5 MB). Send a smaller one.")
+            await update.effective_message.reply_text("❌ That image is too big (max 5 MB). Send a smaller one.")
             return
         p["image"] = data
         # Auto-launch mode + photo just arrived = launch at once.
         if _mode("launch") == "auto":
             if not config.DRY_RUN and get_keypair() is None:
-                await update.message.reply_text("❌ No trading wallet connected. See /connect in Telegram, or run generate_wallet.py and set WALLET_PRIVATE_KEY in Railway Variables.")
+                await update.effective_message.reply_text("❌ No trading wallet connected. See /connect in Telegram, or run generate_wallet.py and set WALLET_PRIVATE_KEY in Railway Variables.")
                 return
             dev_buy = md.get_launch_dev_buy(config.LAUNCH_DEFAULT_DEV_BUY)
-            await update.message.reply_text(
+            await update.effective_message.reply_text(
                 f"🚀 Photo received — auto-launching <b>{p['name']}</b> with {dev_buy} SOL…",
                 parse_mode="HTML")
             try:
                 msg = await _do_launch(p, dev_buy)
             except Exception as e:
-                await update.message.reply_text(f"❌ Launch failed: {e}")
+                await update.effective_message.reply_text(f"❌ Launch failed: {e}")
                 return
             context.user_data.pop("pending_launch", None)
-            await update.message.reply_text(msg, parse_mode="HTML")
+            await update.effective_message.reply_text(msg, parse_mode="HTML")
             return
-        await update.message.reply_text("✅ Image saved for the launch. Tap a Launch button on the preview.")
+        await update.effective_message.reply_text("✅ Image saved for the launch. Tap a Launch button on the preview.")
     except Exception as e:
-        await update.message.reply_text(f"❌ Could not read that photo: {e}")
+        await update.effective_message.reply_text(f"❌ Could not read that photo: {e}")
 
 
 async def _do_launch(p: dict, dev_buy: float) -> str:
@@ -882,14 +946,14 @@ async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             new = md.set_mode(context.args[0].strip().lower(), context.args[1])
         except ValueError as e:
-            await update.message.reply_text(f"❌ {e}\nUsage: /mode <tpsl|copy|launch> <manual|auto>")
+            await update.effective_message.reply_text(f"❌ {e}\nUsage: /mode <tpsl|copy|launch> <manual|auto>")
             return
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"✅ {_MODE_LABELS[context.args[0].strip().lower()]} → {'🤖 AUTO' if new == 'auto' else '✋ MANUAL'}\n"
             f"{_MODE_HELP[context.args[0].strip().lower()]}",
             parse_mode="HTML")
         return
-    await update.message.reply_text(_mode_text(), parse_mode="HTML",
+    await update.effective_message.reply_text(_mode_text(), parse_mode="HTML",
                                     reply_markup=_mode_keyboard())
 
 
@@ -897,7 +961,7 @@ async def launch_set_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if not context.args:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"Auto-launch preset dev buy: {md.get_launch_dev_buy(config.LAUNCH_DEFAULT_DEV_BUY)} SOL\n"
             "Usage: /launch_set <sol> — e.g. /launch_set 0.1 (max 1.0)")
         return
@@ -905,9 +969,9 @@ async def launch_set_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sol = float(context.args[0])
         md.set_launch_dev_buy(sol)
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
         return
-    await update.message.reply_text(f"✅ Auto-launch dev buy set to {sol} SOL.")
+    await update.effective_message.reply_text(f"✅ Auto-launch dev buy set to {sol} SOL.")
 
 
 async def on_mode_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -980,7 +1044,7 @@ async def trail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if not context.args:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"Trailing breakeven SL: {'ON' if md.get_setting('trail') == 'on' else 'OFF'}\n"
             "TP 2x-এ 50% বেচার পর বাকি 50%-এর SL entry price-এ (0%) উঠে যায় — "
             "লাভের অংশটা আর লসে বন্ধ হয় না।\nUsage: /trail on | /trail off")
@@ -988,9 +1052,9 @@ async def trail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         v = md.set_setting("trail", context.args[0])
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
         return
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         "✅ Trailing breakeven SL ON — TP-এর পর বাকি position entry-তে protect থাকবে."
         if v == "on" else
         "✅ Trailing SL OFF — TP-এর পরও আগের SL-ই থাকবে।")
@@ -1000,7 +1064,7 @@ async def rug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if not context.args:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"Rug check mode: {md.get_setting('rug').upper()}\n"
             "normal = DANGER/UNKNOWN ব্লক, WARNING কেনা যায়।\n"
             "strict = WARNING-ও ব্লক, শুধু GOOD টোকেন কেনা যায়।\n"
@@ -1009,9 +1073,9 @@ async def rug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         v = md.set_setting("rug", context.args[0])
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
         return
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         "✅ Rug check STRICT — WARNING টোকেনও আর কেনা হবে না।"
         if v == "strict" else
         "✅ Rug check NORMAL — WARNING টোকেন কেনা যাবে, DANGER ব্লক থাকবে।")
@@ -1021,7 +1085,7 @@ async def dip_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if len(context.args) < 3:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "Usage: /dip_add <mint> <target price USD> <sol>\n"
             "Example: /dip_add <mint> 0.000001 0.1\n"
             "দাম target-এ নামলেই বট rug check করে auto-buy করবে। Max 5 টা watch।")
@@ -1031,36 +1095,36 @@ async def dip_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = float(context.args[1])
         sol = float(context.args[2])
     except ValueError:
-        await update.message.reply_text("Target price and SOL must be numbers, e.g. 0.000001 0.1")
+        await update.effective_message.reply_text("Target price and SOL must be numbers, e.g. 0.000001 0.1")
         return
     if target <= 0:
-        await update.message.reply_text("Target price must be above 0.")
+        await update.effective_message.reply_text("Target price must be above 0.")
         return
     if sol < config.MIN_BUY_SOL or sol > config.MAX_BUY_SOL:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"SOL must be {config.MIN_BUY_SOL} ≤ SOL ≤ {config.MAX_BUY_SOL}.")
         return
-    await update.message.reply_text("🔍 Checking current price…")
+    await update.effective_message.reply_text("🔍 Checking current price…")
     try:
         result = await check_token(mint)
     except Exception as e:
-        await update.message.reply_text(f"❌ Could not check this token: {e}")
+        await update.effective_message.reply_text(f"❌ Could not check this token: {e}")
         return
     cur = result.get("price_usd")
     if not cur:
-        await update.message.reply_text("❌ No price found for this token yet.")
+        await update.effective_message.reply_text("❌ No price found for this token yet.")
         return
     if target >= cur:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"Target ${target:g} is already above the current price ${cur:g} — "
             f"it would buy immediately. Set a target below ${cur:g}.")
         return
     symbol = result.get("token_symbol") or mint[:6]
     if not watch.add_dip(mint, symbol, target, sol):
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"Max {watch.MAX_DIPS} dip watches. Remove one first (/dip_remove).")
         return
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         f"📉 Dip watch ON — {symbol}\nCurrent: ${cur:g} → buy at ${target:g} "
         f"with {sol} SOL (rug check first).\nSee all: /dip_list")
 
@@ -1070,7 +1134,7 @@ async def dip_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     dips = watch.list_dips()
     if not dips:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "No dip watches. Add one: /dip_add <mint> <target price USD> <sol>")
         return
     lines = ["📉 Dip watches:"]
@@ -1078,24 +1142,24 @@ async def dip_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(
             f"\n<b>{d['symbol']}</b> — buy {d['sol']} SOL at ${d['target_price_usd']:g}\n"
             f"<code>{d['mint']}</code>")
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    await update.effective_message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
 async def dip_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if not context.args:
-        await update.message.reply_text("Usage: /dip_remove <mint>")
+        await update.effective_message.reply_text("Usage: /dip_remove <mint>")
         return
     ok = watch.remove_dip(context.args[0].strip())
-    await update.message.reply_text("Dip watch removed." if ok else "No watch for that mint. See /dip_list.")
+    await update.effective_message.reply_text("Dip watch removed." if ok else "No watch for that mint. See /dip_list.")
 
 
 async def set_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if not context.args:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"Priority fee: {_settings['priority_fee_lamports']} lamports "
             f"({'Jupiter auto' if _settings['priority_fee_lamports'] == 0 else 'fixed'})\n"
             "Usage: /set_priority <lamports> — e.g. /set_priority 10000 (0 = auto).\n"
@@ -1104,13 +1168,13 @@ async def set_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         lamports = int(context.args[0])
     except ValueError:
-        await update.message.reply_text("Lamports must be a whole number, e.g. 10000")
+        await update.effective_message.reply_text("Lamports must be a whole number, e.g. 10000")
         return
     if lamports < 0 or lamports > 1_000_000:
-        await update.message.reply_text("Priority fee must be 0 – 1,000,000 lamports.")
+        await update.effective_message.reply_text("Priority fee must be 0 – 1,000,000 lamports.")
         return
     _settings["priority_fee_lamports"] = lamports
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         "Priority fee set to Jupiter auto." if lamports == 0 else
         f"Priority fee set to {lamports} lamports per swap.")
 
@@ -1125,7 +1189,7 @@ async def copy_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if not context.args:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "Usage: /copy_add <trader wallet address> [sol per copy buy]\n"
             "Example: /copy_add 7xK...9Qp 0.1\n"
             "This is the trader's WALLET address, not a token mint.\n"
@@ -1134,24 +1198,24 @@ async def copy_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     wallet = context.args[0].strip()
     if not _looks_like_wallet(wallet):
-        await update.message.reply_text("That doesn't look like a Solana wallet address.")
+        await update.effective_message.reply_text("That doesn't look like a Solana wallet address.")
         return
     try:
         sol = float(context.args[1]) if len(context.args) > 1 else config.COPY_DEFAULT_SOL
     except ValueError:
-        await update.message.reply_text("SOL amount must be a number, e.g. 0.1")
+        await update.effective_message.reply_text("SOL amount must be a number, e.g. 0.1")
         return
     if sol < config.MIN_BUY_SOL or sol > config.MAX_BUY_SOL:
-        await update.message.reply_text(f"SOL per copy buy must be {config.MIN_BUY_SOL} ≤ SOL ≤ {config.MAX_BUY_SOL}.")
+        await update.effective_message.reply_text(f"SOL per copy buy must be {config.MIN_BUY_SOL} ≤ SOL ≤ {config.MAX_BUY_SOL}.")
         return
     if ct.get_target(wallet):
-        await update.message.reply_text("Already following this wallet. Use /copy_set to change the amount.")
+        await update.effective_message.reply_text("Already following this wallet. Use /copy_set to change the amount.")
         return
     if not ct.add_target(wallet, sol, _settings["sl_pct"]):
-        await update.message.reply_text(f"Max {config.COPY_MAX_TARGETS} copy targets. Remove one first (/copy_remove).")
+        await update.effective_message.reply_text(f"Max {config.COPY_MAX_TARGETS} copy targets. Remove one first (/copy_remove).")
         return
     mode = "Helius" if config.HELIUS_API_KEY else "plain RPC (slower — set HELIUS_API_KEY for faster detection)"
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         f"📋 Copy ON for <code>{wallet}</code>\n"
         f"Per copied buy: {sol} SOL • Own SL: {_settings['sl_pct']}%\n"
         f"Detection: {mode}, every ~{config.COPY_POLL_SECONDS}s.\n"
@@ -1167,7 +1231,7 @@ async def copy_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     targets = ct.list_targets()
     if not targets:
-        await update.message.reply_text("No copy targets. Add one: /copy_add <wallet> [sol]")
+        await update.effective_message.reply_text("No copy targets. Add one: /copy_add <wallet> [sol]")
         return
     lines = ["📋 Copy targets:"]
     for t in targets:
@@ -1175,37 +1239,37 @@ async def copy_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"\n<code>{t['wallet'][:8]}…{t['wallet'][-4:]}</code> — "
             f"{'🟢 ON' if t['enabled'] else '🔴 OFF'} • {t['sol_per_trade']} SOL/buy • SL {t['sl_pct']}%"
         )
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    await update.effective_message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
 async def copy_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if not context.args:
-        await update.message.reply_text("Usage: /copy_remove <wallet>")
+        await update.effective_message.reply_text("Usage: /copy_remove <wallet>")
         return
     ok = ct.remove_target(context.args[0].strip())
-    await update.message.reply_text("Removed." if ok else "That wallet was not in your copy list.")
+    await update.effective_message.reply_text("Removed." if ok else "That wallet was not in your copy list.")
 
 
 async def copy_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if not context.args:
-        await update.message.reply_text("Usage: /copy_on <wallet>")
+        await update.effective_message.reply_text("Usage: /copy_on <wallet>")
         return
     ok = ct.set_target_enabled(context.args[0].strip(), True)
-    await update.message.reply_text("Copy ON." if ok else "Wallet not found. See /copy_list.")
+    await update.effective_message.reply_text("Copy ON." if ok else "Wallet not found. See /copy_list.")
 
 
 async def copy_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if not context.args:
-        await update.message.reply_text("Usage: /copy_off <wallet>")
+        await update.effective_message.reply_text("Usage: /copy_off <wallet>")
         return
     ok = ct.set_target_enabled(context.args[0].strip(), False)
-    await update.message.reply_text("Copy OFF — the bot will ignore this wallet until /copy_on.")
+    await update.effective_message.reply_text("Copy OFF — the bot will ignore this wallet until /copy_on.")
     # Note: copy_off does NOT sell your open copy positions. Sell them with /sell.
 
 
@@ -1213,15 +1277,15 @@ async def copy_sl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /copy_sl <wallet> <pct> — e.g. /copy_sl <wallet> -30")
+        await update.effective_message.reply_text("Usage: /copy_sl <wallet> <pct> — e.g. /copy_sl <wallet> -30")
         return
     try:
         pct = float(context.args[1])
     except ValueError:
-        await update.message.reply_text("Percent must be a number, e.g. -30")
+        await update.effective_message.reply_text("Percent must be a number, e.g. -30")
         return
     ok = ct.set_target_sl(context.args[0].strip(), pct)
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         f"Copy SL set to {pct}% for this wallet." if ok else "Wallet not found. See /copy_list."
     )
 
@@ -1230,18 +1294,18 @@ async def copy_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /copy_set <wallet> <sol> — e.g. /copy_set <wallet> 0.1")
+        await update.effective_message.reply_text("Usage: /copy_set <wallet> <sol> — e.g. /copy_set <wallet> 0.1")
         return
     try:
         sol = float(context.args[1])
     except ValueError:
-        await update.message.reply_text("SOL must be a number, e.g. 0.1")
+        await update.effective_message.reply_text("SOL must be a number, e.g. 0.1")
         return
     if sol < config.MIN_BUY_SOL or sol > config.MAX_BUY_SOL:
-        await update.message.reply_text(f"SOL per copy buy must be {config.MIN_BUY_SOL} ≤ SOL ≤ {config.MAX_BUY_SOL}.")
+        await update.effective_message.reply_text(f"SOL per copy buy must be {config.MIN_BUY_SOL} ≤ SOL ≤ {config.MAX_BUY_SOL}.")
         return
     ok = ct.set_target_sol(context.args[0].strip(), sol)
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         f"Copy buy set to {sol} SOL." if ok else "Wallet not found. See /copy_list."
     )
 
@@ -1451,6 +1515,7 @@ def main():
     app.add_handler(CommandHandler("set_priority", set_priority))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^buy:"))
     app.add_handler(CallbackQueryHandler(on_launch_button, pattern=r"^launch:"))
+    app.add_handler(CallbackQueryHandler(on_menu_button, pattern=r"^menu:"))
     app.add_handler(CallbackQueryHandler(on_mode_button, pattern=r"^mode:"))
     app.add_handler(CallbackQueryHandler(on_sell_button, pattern=r"^sell:"))
     app.add_handler(CallbackQueryHandler(on_copybuy_button, pattern=r"^(copybuy|copyignore):"))
